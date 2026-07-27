@@ -1,11 +1,15 @@
 // ALIKA · Tuya control server
 // -----------------------------------------------------------------------
-// เซิร์ฟเวอร์เล็กๆ ตัวนี้ทำหน้าที่เป็น "ตัวกลาง" ระหว่างเว็บไซต์โชว์ของ Alika
-// กับ Tuya Cloud API — เก็บ Client ID / Client Secret ไว้อย่างปลอดภัยที่นี่
-// (ไม่ฝังไว้ในเว็บไซต์) แล้วเปิด endpoint 2 อันให้เว็บไซต์เรียกใช้:
+// เซิร์ฟเวอร์เล็กๆ ตัวนี้ทำหน้าทีเป็น "ตัวกลาง" ระหว่างเว็บไซต์โชว์ของ Alika
+// กับ Tuya Cloud API — เก็บ Client ID / Client Secret ไว้อย่างปลอดภยที่นี่
+// (ไม่ฝังไว้ในเว็บไซต์) แล้วเปิด endpoint ให้เว็บไซต์เรียกใช้:
 //
-//   POST /api/plug/blacklight   body: { "on": true }
-//   POST /api/plug/tableLight   body: { "on": false }
+//   POST /api/plug/blacklight   body: { "on": [{"code":"switch_1","value":true}] }
+//   POST /api/plug/tableLight   body: { "on": [{"code":"switch_1","value":false}] }
+//
+//   GET  /api/show-status       -> { started: true/false, startedAt: <ms> | null }
+//   POST /api/show-status       body: { "started": true }  หรือ { "started": false }
+//   (ใช้เป็นสัญญาณกลาง ให้หน้าเว็บที่เปิดค้างไว้ที่ทีวี รว่า iPad กด "เริ่มโชว์" แล้วหรือยง)
 //
 // ต้องตั้งค่า Environment Variables ก่อนรัน (ดู .env.example):
 //   TUYA_CLIENT_ID, TUYA_CLIENT_SECRET, TUYA_REGION,
@@ -19,7 +23,6 @@ const crypto = require('crypto');
 const app = express();
 app.use(express.json());
 
-// อนุญาตให้เว็บไซต์ของเธอเรียก endpoint นี้ข้ามโดเมนได้ (CORS)
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
   res.header('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
@@ -29,7 +32,7 @@ app.use((req, res, next) => {
 });
 
 const REGION_HOSTS = {
-  eu: 'https://openapi.tuyaeu.com',   // Western European Data Center
+  eu: 'https://openapi.tuyaeu.com',
   us: 'https://openapi.tuyaus.com',
   cn: 'https://openapi.tuyacn.com',
   in: 'https://openapi.tuyain.com',
@@ -43,11 +46,12 @@ const SWITCH_CODE = process.env.TUYA_SWITCH_CODE || 'switch_1';
 const DEVICE_IDS = {
   blacklight: process.env.TUYA_BLACKLIGHT_DEVICE_ID,
   tableLight: process.env.TUYA_TABLELIGHT_DEVICE_ID,
-  ambient: process.env.TUYA_AMBIENT_LIGHT_DEVICE_ID, // ไฟ RGB/LED strip ที่ใช้หรี่แสง
+  ambient: process.env.TUYA_AMBIENT_LIGHT_DEVICE_ID,
 };
 const BRIGHTNESS_CODE = process.env.TUYA_BRIGHTNESS_CODE || 'bright_value_v2';
 
-let cachedToken = null; // { token, expiresAt }
+let cachedToken = null;
+let showStatus = { started: false, startedAt: null, videoUrl: "" };
 
 function sha256Hex(str) {
   return crypto.createHash('sha256').update(str, 'utf8').digest('hex');
@@ -57,12 +61,10 @@ function hmacSign(str) {
   return crypto.createHmac('sha256', CLIENT_SECRET).update(str, 'utf8').digest('hex').toUpperCase();
 }
 
-// สร้างลายเซ็นตามกติกาของ Tuya (HMAC-SHA256), ใช้ได้ทั้งตอนขอ token
-// และตอนเรียก API ทั่วไป (ที่ต้องแนบ access_token เพิ่ม)
 function buildSign({ method, path, body, accessToken }) {
   const t = Date.now().toString();
   const bodyHash = sha256Hex(body ? JSON.stringify(body) : '');
-  const headersStr = ''; // ไม่ใช้ signHeaders ในตัวอย่างนี้
+  const headersStr = '';
   const stringToSign = [method, bodyHash, headersStr, path].join('\n');
   const base = CLIENT_ID + (accessToken || '') + t + stringToSign;
   return { sign: hmacSign(base), t };
@@ -117,27 +119,4 @@ async function setSwitch(deviceId, on) {
 }
 
 async function setBrightness(deviceId, value) {
-  // value: 0–1000 ตามมาตรฐาน DP ของ Tuya สำหรับไฟหรี่แสง
-  const v = Math.max(0, Math.min(1000, Math.round(value)));
-  return sendCommand(deviceId, [{ code: BRIGHTNESS_CODE, value: v }]);
-}
-
-app.post('/api/plug/:name', async (req, res) => {
-  const { name } = req.params;
-  const { on } = req.body;
-  const deviceId = DEVICE_IDS[name];
-  if (!deviceId) {
-    return res.status(400).json({ ok: false, error: `ไม่รู้จักปลั๊กชื่อ "${name}" หรือยังไม่ได้ตั้งค่า Device ID` });
-  }
-  try {
-    const result = await sendCommand(deviceId, on);
-    res.json({ ok: !!result.success, result });
-  } catch (err) {
-    res.status(500).json({ ok: false, error: err.message });
-  }
-});
-
-app.get('/', (req, res) => res.send('ALIKA Tuya control server is running.'));
-
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Alika Tuya server listening on port ${PORT}`));
+  const v = Math.max(0, Math.min(1000, Math.round
