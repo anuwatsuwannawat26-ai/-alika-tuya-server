@@ -11,6 +11,8 @@
 //   POST /api/show-status       body: { "started": true }  หรือ { "started": false }
 //   (ใช้เป็นสัญญาณกลาง ให้หน้าเว็บที่เปิดค้างไว้ที่ทีวี รู้ว่า iPad กด "เริ่มโชว์" แล้วหรือยัง)
 //
+//   GET  /api/tuya-test         -> เช็คจริงว่าคุยกับ Tuya Cloud ได้ไหม (ขอ token + เช็คสถานะปลั๊กทั้งสอง)
+//
 // ต้องตั้งค่า Environment Variables ก่อนรัน (ดู .env.example):
 //   TUYA_CLIENT_ID, TUYA_CLIENT_SECRET, TUYA_REGION,
 //   TUYA_BLACKLIGHT_DEVICE_ID, TUYA_TABLELIGHT_DEVICE_ID,
@@ -103,6 +105,21 @@ async function getToken() {
   return cachedToken.token;
 }
 
+async function tuyaGet(path, accessToken) {
+  const { sign, t } = buildSign({ method: 'GET', path, accessToken });
+  const resp = await fetch(HOST + path, {
+    method: 'GET',
+    headers: {
+      client_id: CLIENT_ID,
+      access_token: accessToken,
+      sign,
+      t,
+      sign_method: 'HMAC-SHA256',
+    },
+  });
+  return resp.json();
+}
+
 async function sendCommand(deviceId, commands) {
   const token = await getToken();
   const path = `/v1.0/devices/${deviceId}/commands`;
@@ -142,10 +159,56 @@ app.post('/api/plug/:name', async (req, res) => {
   }
   try {
     const result = await sendCommand(deviceId, on);
-    res.json({ ok: !!result.success, result });
+    res.json({ ok: !!result.success, result, error: result.success ? undefined : (result.msg || JSON.stringify(result)) });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
   }
+});
+
+// ------------------------------------------------------------
+// Tuya connectivity test — เช็คจริงว่า credential ใช้ได้ไหม และปลั๊กแต่ละตัว
+// เชื่อมกับ Cloud Project นี้อยู่จริงไหม (คนละเรื่องกับแค่ server ทำงานอยู่)
+// ------------------------------------------------------------
+app.get('/api/tuya-test', async (req, res) => {
+  const out = { credentialsConfigured: !!(CLIENT_ID && CLIENT_SECRET), region: process.env.TUYA_REGION || 'eu' };
+
+  if (!out.credentialsConfigured) {
+    return res.json({ ok: false, ...out, error: 'ยังไม่ได้ตั้งค่า TUYA_CLIENT_ID หรือ TUYA_CLIENT_SECRET บน Render' });
+  }
+
+  let token;
+  try {
+    token = await getToken();
+    out.tokenOk = true;
+  } catch (err) {
+    out.tokenOk = false;
+    out.tokenError = err.message;
+    return res.json({ ok: false, ...out });
+  }
+
+  const devices = {};
+  for (const [key, deviceId] of Object.entries(DEVICE_IDS)) {
+    if (!deviceId) {
+      devices[key] = { configured: false };
+      continue;
+    }
+    try {
+      const info = await tuyaGet(`/v1.0/devices/${deviceId}`, token);
+      devices[key] = {
+        configured: true,
+        deviceId,
+        reachable: !!info.success,
+        online: info.success ? !!(info.result && info.result.online) : undefined,
+        name: info.success ? (info.result && info.result.name) : undefined,
+        error: info.success ? undefined : (info.msg || JSON.stringify(info)),
+      };
+    } catch (err) {
+      devices[key] = { configured: true, deviceId, reachable: false, error: err.message };
+    }
+  }
+
+  const allOk = Object.values(devices).every(d => !d.configured || (d.reachable && d.online));
+  res.json({ ok: allOk, ...out, devices });
 });
 
 // ------------------------------------------------------------
