@@ -1,8 +1,8 @@
 // ALIKA · Tuya control server
 // -----------------------------------------------------------------------
-// เซรฟเวอรเลกๆ ตัวนี้ทำหน้าทีเป็น "ตัวกลาง" ระหว่างเว็บไซตโชว์ของ Alika
+// เซิร์ฟเวอร์เล็กๆ ตัวนี้ทำหน้าที่เป็น "ตัวกลาง" ระหว่างเว็บไซต์โชว์ของ Alika
 // กับ Tuya Cloud API — เก็บ Client ID / Client Secret ไว้อย่างปลอดภัยที่นี่
-// (ไม่ฝังไว้ในเว็บไซต์) แล้วเปด endpoint ให้เว็บไซต์เรียกใช้:
+// (ไม่ฝังไว้ในเว็บไซต์) แล้วเปิด endpoint ให้เว็บไซต์เรียกใช้:
 //
 //   POST /api/plug/blacklight   body: { "on": [{"code":"switch_1","value":true}] }
 //   POST /api/plug/tableLight   body: { "on": [{"code":"switch_1","value":false}] }
@@ -26,7 +26,7 @@
 //   TUYA_SPOTLIGHT_1_DEVICE_ID .. TUYA_SPOTLIGHT_4_DEVICE_ID   (ใส่พรุ่งนี้หลังจับคู่หลอด Spotlight)
 //   TUYA_SWITCH_CODE (ปกติคือ "switch_1"), TUYA_BRIGHTNESS_CODE (ปกติคือ "bright_value_v2")
 //   TUYA_COLOR_MODE_CODE (ปกติคือ "work_mode"), TUYA_COLOR_DATA_CODE (ปกติคือ "colour_data_v2")
-//     — ถ้าหลอด LSC ใช้ชื่อ DP ต่างจากนี้ เช็คไดจาก Tuya IoT Platform > อุปกรณ์ > Debug Device
+//     — ถ้าหลอด LSC ใช้ชื่อ DP ต่างจากนี้ เช็คได้จาก Tuya IoT Platform > อุปกรณ์ > Debug Device
 // -----------------------------------------------------------------------
 
 const express = require('express');
@@ -62,7 +62,10 @@ const COLOR_DATA_CODE = process.env.TUYA_COLOR_DATA_CODE || 'colour_data_v2';
 const DEVICE_IDS = {
   blacklight: process.env.TUYA_BLACKLIGHT_DEVICE_ID,
   tableLight: process.env.TUYA_TABLELIGHT_DEVICE_ID,
-  ambient: process.env.TUYA_AMBIENT_LIGHT_DEVICE_ID,
+  // "ไฟสี" (ambient) เป็นปลั๊กตัวเดียวกับ "ไฟโต๊ะ" (M10EM 3) — ไม่ใช่อุปกรณ์แยก
+  // ใช้ Device ID เดียวกันเป็นค่าเริ่มต้นเสมอ (เว้นแต่ตั้ง TUYA_AMBIENT_LIGHT_DEVICE_ID
+  // แยกไว้ที่ Render ก็ให้ใช้ค่านั้นแทน) — แก้ 2026-08-22
+  ambient: process.env.TUYA_AMBIENT_LIGHT_DEVICE_ID || process.env.TUYA_TABLELIGHT_DEVICE_ID,
 };
 
 const SPOTLIGHT_DEVICE_IDS = [
@@ -169,9 +172,6 @@ async function setBrightness(deviceId, value) {
   return sendCommand(deviceId, [{ code: BRIGHTNESS_CODE, value: v }]);
 }
 
-// Spotlight: เปิด/ปิด + หร + เปลี่ยนสี ในคำสั่งเดียว
-// เมอ "ปิด" (on=false) จะส่งแค่คำสั่งสวิตช์อย่างเดียว ไม่แนบความสว่าง/สีไปด้วย —
-// เพราะ DP ความสว่างของหลอดนี้กำหนดค่าตสุดไว้ที่ 10 (ไม่ใช่ 0)
 async function setSpotlight(deviceId, on, brightness, hue) {
   if (!on) {
     return sendCommand(deviceId, [{ code: SPOTLIGHT_SWITCH_CODE, value: false }]);
@@ -181,9 +181,6 @@ async function setSpotlight(deviceId, on, brightness, hue) {
     const v = Math.max(10, Math.min(1000, Math.round(brightness * 10)));
     commands.push({ code: BRIGHTNESS_CODE, value: v });
   }
-  // ใช้โหมด "colour" เสมอ (แม้จะเป็นสีขาว) แทนโหมด "white" แยกต่างหาก —
-  // เพราะ LED ชุด "white" ของหลอดนี้กระจายแสงกว้างกว่าชุด "colour" มาก
-  // (พบและแก้ 2026-08-22 หลัง Alika รายงานว่าไฟกลายเป็นแสงกระจายแทนลำแคบ)
   const hsv = HUE_MAP[hue] || { h: 0, s: 0, v: 1000 };
   commands.push({ code: COLOR_MODE_CODE, value: 'colour' });
   commands.push({ code: COLOR_DATA_CODE, value: hsv });
@@ -195,7 +192,7 @@ app.post('/api/plug/:name', async (req, res) => {
   const { on } = req.body;
   const deviceId = DEVICE_IDS[name];
   if (!deviceId) {
-    return res.status(400).json({ ok: false, error: `ไม่รู้จักปลกชื่อ "${name}" หรือยังไม่ได้ตั้งค่า Device ID` });
+    return res.status(400).json({ ok: false, error: `ไม่รู้จักปลั๊กชื่อ "${name}" หรือยังไม่ได้ตั้งค่า Device ID` });
   }
   try {
     const result = await sendCommand(deviceId, on);
@@ -209,7 +206,7 @@ app.post('/api/spotlight/:head', async (req, res) => {
   const head = parseInt(req.params.head, 10);
   const deviceId = SPOTLIGHT_DEVICE_IDS[head];
   if (!deviceId) {
-    return res.status(400).json({ ok: false, error: `Spotlight หวที่ ${head + 1} ยังไม่ได้ตั้งค่า Device ID (TUYA_SPOTLIGHT_${head + 1}_DEVICE_ID)` });
+    return res.status(400).json({ ok: false, error: `Spotlight หัวที่ ${head + 1} ยังไม่ได้ตั้งค่า Device ID (TUYA_SPOTLIGHT_${head + 1}_DEVICE_ID)` });
   }
   const { on, brightness, hue } = req.body;
   try {
