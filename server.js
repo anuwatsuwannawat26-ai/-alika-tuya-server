@@ -6,17 +6,27 @@
 //
 //   POST /api/plug/blacklight   body: { "on": [{"code":"switch_1","value":true}] }
 //   POST /api/plug/tableLight   body: { "on": [{"code":"switch_1","value":false}] }
+//   POST /api/plug/ambient      body: { "on": [{"code":"switch_1","value":true}] }
+//        (= "ไฟสี" — ใช้ endpoint เดิมนี้ได้เลย ไม่ต้องมี endpoint ใหม่)
 //
-//   GET  /api/show-status       -> { started: true/false, startedAt: <ms> | null }
+//   POST /api/spotlight/:head   body: { "on": true, "brightness": 0-100, "hue": "white"|"gold"|"amber"|"orange"|"red"|"purple" }
+//        head = 0,1,2,3 (หัวที่ 1-4)
+//
+//   GET  /api/show-status       -> { started, startedAt, videoUrl, seekSeconds, seekToken }
 //   POST /api/show-status       body: { "started": true }  หรือ { "started": false }
-//   (ใช้เป็นสัญญาณกลาง ให้หน้าเว็บที่เปิดค้างไว้ที่ทีวี รู้ว่า iPad กด "เริ่มโชว์" แล้วหรือยัง)
+//                                    หรือ { "seekSeconds": 123.4 }  (ใหม่ — สั่งเลื่อนวิดีโอ)
+//   (ใช้เป็นสัญญาณกลาง ให้หน้าเว็บที่เปิดค้างไว้ที่ทีวี รู้ว่า iPad กด "เริ่มโชว์"/เลื่อนวิดีโอ แล้วหรือยัง)
 //
-//   GET  /api/tuya-test         -> เช็คจริงว่าคุยกับ Tuya Cloud ได้ไหม (ขอ token + เช็คสถานะปลั๊กทั้งสอง)
+//   GET  /api/tuya-test         -> เช็คจริงว่าคุยกับ Tuya Cloud ได้ไหม (ขอ token + เช็คสถานะทุกอุปกรณ์)
 //
 // ต้องตั้งค่า Environment Variables ก่อนรัน (ดู .env.example):
 //   TUYA_CLIENT_ID, TUYA_CLIENT_SECRET, TUYA_REGION,
 //   TUYA_BLACKLIGHT_DEVICE_ID, TUYA_TABLELIGHT_DEVICE_ID,
-//   TUYA_SWITCH_CODE (ปกติคือ "switch_1" — เช็คได้จาก Tuya IoT Platform)
+//   TUYA_AMBIENT_LIGHT_DEVICE_ID   (= "ไฟสี" — ใส่ตอนที่รู้ว่าจับคู่ Tuya ได้จริงไหม)
+//   TUYA_SPOTLIGHT_1_DEVICE_ID .. TUYA_SPOTLIGHT_4_DEVICE_ID   (ใส่พรุ่งนี้หลังจับคู่หลอด Spotlight)
+//   TUYA_SWITCH_CODE (ปกติคือ "switch_1"), TUYA_BRIGHTNESS_CODE (ปกติคือ "bright_value_v2")
+//   TUYA_COLOR_MODE_CODE (ปกติคือ "work_mode"), TUYA_COLOR_DATA_CODE (ปกติคือ "colour_data_v2")
+//     — ถ้าหลอด LSC ใช้ชื่อ DP ต่างจากนี้ เช็คได้จาก Tuya IoT Platform > อุปกรณ์ > Debug Device
 // -----------------------------------------------------------------------
 
 const express = require('express');
@@ -45,13 +55,35 @@ const CLIENT_ID = process.env.TUYA_CLIENT_ID;
 const CLIENT_SECRET = process.env.TUYA_CLIENT_SECRET;
 const HOST = REGION_HOSTS[process.env.TUYA_REGION || 'eu'];
 const SWITCH_CODE = process.env.TUYA_SWITCH_CODE || 'switch_1';
+const BRIGHTNESS_CODE = process.env.TUYA_BRIGHTNESS_CODE || 'bright_value_v2';
+const COLOR_MODE_CODE = process.env.TUYA_COLOR_MODE_CODE || 'work_mode';
+const COLOR_DATA_CODE = process.env.TUYA_COLOR_DATA_CODE || 'colour_data_v2';
 
 const DEVICE_IDS = {
   blacklight: process.env.TUYA_BLACKLIGHT_DEVICE_ID,
   tableLight: process.env.TUYA_TABLELIGHT_DEVICE_ID,
-  ambient: process.env.TUYA_AMBIENT_LIGHT_DEVICE_ID, // ไฟ RGB/LED strip ที่ใช้หรี่แสง
+  ambient: process.env.TUYA_AMBIENT_LIGHT_DEVICE_ID, // "ไฟสี" — RGB auto-cycling light
 };
-const BRIGHTNESS_CODE = process.env.TUYA_BRIGHTNESS_CODE || 'bright_value_v2';
+
+// 4-head Spotlight (LSC Smart Connect), index 0-3 = หัวที่ 1-4.
+// Empty until paired tomorrow — every call below no-ops safely until then.
+const SPOTLIGHT_DEVICE_IDS = [
+  process.env.TUYA_SPOTLIGHT_1_DEVICE_ID,
+  process.env.TUYA_SPOTLIGHT_2_DEVICE_ID,
+  process.env.TUYA_SPOTLIGHT_3_DEVICE_ID,
+  process.env.TUYA_SPOTLIGHT_4_DEVICE_ID,
+];
+
+// Named colours used by the V2 cue engine -> approximate Tuya HSV.
+// h: 0-360, s/v: 0-1000. 'white' skips colour mode entirely (uses the
+// bulb's white channel instead, which is usually brighter/cleaner).
+const HUE_MAP = {
+  gold:   { h: 45,  s: 900,  v: 1000 },
+  amber:  { h: 35,  s: 950,  v: 1000 },
+  orange: { h: 25,  s: 1000, v: 1000 },
+  red:    { h: 0,   s: 1000, v: 1000 },
+  purple: { h: 280, s: 900,  v: 1000 },
+};
 
 let cachedToken = null; // { token, expiresAt }
 
@@ -59,8 +91,14 @@ let cachedToken = null; // { token, expiresAt }
 // สถานะโชว์แบบง่ายๆ เก็บไว้ในหน่วยความจำของ server (ไม่ต้องใช้ฐานข้อมูล)
 // อยู่รอดตราบใดที่ server ยังไม่รีสตาร์ท (บน free plan ของ Render
 // server จะ "หลับ" เมื่อไม่มีคนใช้งาน แต่ค่านี้จะรีเซ็ตเป็น false ทุกครั้งที่ตื่นใหม่)
+//
+// seekSeconds/seekToken: ใหม่ — ใช้ส่งคำสั่ง "เลื่อนวิดีโอไปวินาทีนี้" จาก
+// iPad ไปให้หน้าจอทีวี (คนละเครื่อง คนละ browser กัน เดิมไม่มีช่องทางนี้เลย
+// ทำให้ลากปุ่มเลื่อนแล้ววิดีโอบนทีวีไม่ตาม — นี่คือจุดที่แก้ให้ตรงนี้).
+// seekToken เปลี่ยนค่าทุกครั้งที่มีการเลื่อนใหม่ ทีวี poll แล้วเทียบค่านี้
+// เพื่อรู้ว่า "นี่เป็นคำสั่งเลื่อนใหม่ที่ยังไม่เคยทำ" ไม่ใช่ค่าเดิมที่เคยเห็นแล้ว.
 // ------------------------------------------------------------
-let showStatus = { started: false, startedAt: null, videoUrl: "" };
+let showStatus = { started: false, startedAt: null, videoUrl: "", seekSeconds: null, seekToken: 0 };
 
 function sha256Hex(str) {
   return crypto.createHash('sha256').update(str, 'utf8').digest('hex');
@@ -150,6 +188,22 @@ async function setBrightness(deviceId, value) {
   return sendCommand(deviceId, [{ code: BRIGHTNESS_CODE, value: v }]);
 }
 
+// Spotlight: เปิด/ปิด + หรี่ + เปลี่ยนสี ในคำสั่งเดียว (ครบตามที่ V2 cue engine ต้องการ)
+async function setSpotlight(deviceId, on, brightness, hue) {
+  const commands = [{ code: SWITCH_CODE, value: !!on }];
+  if (brightness != null) {
+    commands.push({ code: BRIGHTNESS_CODE, value: Math.max(0, Math.min(1000, Math.round(brightness * 10))) });
+  }
+  const hsv = HUE_MAP[hue];
+  if (hsv) {
+    commands.push({ code: COLOR_MODE_CODE, value: 'colour' });
+    commands.push({ code: COLOR_DATA_CODE, value: hsv });
+  } else {
+    commands.push({ code: COLOR_MODE_CODE, value: 'white' });
+  }
+  return sendCommand(deviceId, commands);
+}
+
 app.post('/api/plug/:name', async (req, res) => {
   const { name } = req.params;
   const { on } = req.body;
@@ -166,7 +220,25 @@ app.post('/api/plug/:name', async (req, res) => {
 });
 
 // ------------------------------------------------------------
-// Tuya connectivity test — เช็คจริงว่า credential ใช้ได้ไหม และปลั๊กแต่ละตัว
+// Spotlight — 4 หัว ควบคุมทีละหัว (เปิด/ปิด/หรี่/เปลี่ยนสีในคำสั่งเดียว)
+// ------------------------------------------------------------
+app.post('/api/spotlight/:head', async (req, res) => {
+  const head = parseInt(req.params.head, 10);
+  const deviceId = SPOTLIGHT_DEVICE_IDS[head];
+  if (!deviceId) {
+    return res.status(400).json({ ok: false, error: `Spotlight หัวที่ ${head + 1} ยังไม่ได้ตั้งค่า Device ID (TUYA_SPOTLIGHT_${head + 1}_DEVICE_ID)` });
+  }
+  const { on, brightness, hue } = req.body;
+  try {
+    const result = await setSpotlight(deviceId, on, brightness, hue);
+    res.json({ ok: !!result.success, result, error: result.success ? undefined : (result.msg || JSON.stringify(result)) });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// ------------------------------------------------------------
+// Tuya connectivity test — เช็คจริงว่า credential ใช้ได้ไหม และอุปกรณ์แต่ละตัว
 // เชื่อมกับ Cloud Project นี้อยู่จริงไหม (คนละเรื่องกับแค่ server ทำงานอยู่)
 // ------------------------------------------------------------
 app.get('/api/tuya-test', async (req, res) => {
@@ -186,8 +258,16 @@ app.get('/api/tuya-test', async (req, res) => {
     return res.json({ ok: false, ...out });
   }
 
+  const allDeviceEntries = {
+    ...DEVICE_IDS,
+    spotlight1: SPOTLIGHT_DEVICE_IDS[0],
+    spotlight2: SPOTLIGHT_DEVICE_IDS[1],
+    spotlight3: SPOTLIGHT_DEVICE_IDS[2],
+    spotlight4: SPOTLIGHT_DEVICE_IDS[3],
+  };
+
   const devices = {};
-  for (const [key, deviceId] of Object.entries(DEVICE_IDS)) {
+  for (const [key, deviceId] of Object.entries(allDeviceEntries)) {
     if (!deviceId) {
       devices[key] = { configured: false };
       continue;
@@ -213,18 +293,21 @@ app.get('/api/tuya-test', async (req, res) => {
 
 // ------------------------------------------------------------
 // Show status endpoints — ใช้ให้หน้าเว็บที่เปิดค้างไว้ในทีวี (tv.html)
-// คอยเช็คว่า iPad กด "เริ่มโชว์" แล้วหรือยัง
+// คอยเช็คว่า iPad กด "เริ่มโชว์" แล้วหรือยัง / เลื่อนวิดีโอไปวินาทีไหน
 // ------------------------------------------------------------
 app.get('/api/show-status', (req, res) => {
   res.json(showStatus);
 });
 
 app.post('/api/show-status', (req, res) => {
-  const { started, videoUrl } = req.body;
+  const { started, videoUrl, seekSeconds } = req.body;
+  const isSeek = seekSeconds !== undefined && seekSeconds !== null;
   showStatus = {
-    started: !!started,
-    startedAt: started ? Date.now() : null,
-    videoUrl: started ? (videoUrl || showStatus.videoUrl || "") : showStatus.videoUrl,
+    started: started !== undefined ? !!started : showStatus.started,
+    startedAt: started === true ? Date.now() : (started === false ? null : showStatus.startedAt),
+    videoUrl: (started === true) ? (videoUrl || showStatus.videoUrl || "") : showStatus.videoUrl,
+    seekSeconds: isSeek ? seekSeconds : showStatus.seekSeconds,
+    seekToken: isSeek ? (showStatus.seekToken + 1) : showStatus.seekToken,
   };
   res.json({ ok: true, showStatus });
 });
