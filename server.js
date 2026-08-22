@@ -1,8 +1,8 @@
 // ALIKA · Tuya control server
 // -----------------------------------------------------------------------
-// เซิร์ฟเวอร์เล็กๆ ตัวนี้ทำหน้าที่เป็น "ตัวกลาง" ระหว่างเว็บไซต์โชว์ของ Alika
+// เซรฟเวอรเลกๆ ตัวนี้ทำหน้าทีเป็น "ตัวกลาง" ระหว่างเว็บไซตโชว์ของ Alika
 // กับ Tuya Cloud API — เก็บ Client ID / Client Secret ไว้อย่างปลอดภัยที่นี่
-// (ไม่ฝังไว้ในเว็บไซต์) แล้วเปิด endpoint ให้เว็บไซต์เรียกใช้:
+// (ไม่ฝังไว้ในเว็บไซต์) แล้วเปด endpoint ให้เว็บไซต์เรียกใช้:
 //
 //   POST /api/plug/blacklight   body: { "on": [{"code":"switch_1","value":true}] }
 //   POST /api/plug/tableLight   body: { "on": [{"code":"switch_1","value":false}] }
@@ -26,7 +26,7 @@
 //   TUYA_SPOTLIGHT_1_DEVICE_ID .. TUYA_SPOTLIGHT_4_DEVICE_ID   (ใส่พรุ่งนี้หลังจับคู่หลอด Spotlight)
 //   TUYA_SWITCH_CODE (ปกติคือ "switch_1"), TUYA_BRIGHTNESS_CODE (ปกติคือ "bright_value_v2")
 //   TUYA_COLOR_MODE_CODE (ปกติคือ "work_mode"), TUYA_COLOR_DATA_CODE (ปกติคือ "colour_data_v2")
-//     — ถ้าหลอด LSC ใช้ชื่อ DP ต่างจากนี้ เช็คได้จาก Tuya IoT Platform > อุปกรณ์ > Debug Device
+//     — ถ้าหลอด LSC ใช้ชื่อ DP ต่างจากนี้ เช็คไดจาก Tuya IoT Platform > อุปกรณ์ > Debug Device
 // -----------------------------------------------------------------------
 
 const express = require('express');
@@ -35,7 +35,6 @@ const crypto = require('crypto');
 const app = express();
 app.use(express.json());
 
-// อนุญาตให้เว็บไซต์ของเธอเรียก endpoint นี้ข้ามโดเมนได้ (CORS)
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
   res.header('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
@@ -45,7 +44,7 @@ app.use((req, res, next) => {
 });
 
 const REGION_HOSTS = {
-  eu: 'https://openapi.tuyaeu.com',   // Western European Data Center
+  eu: 'https://openapi.tuyaeu.com',
   us: 'https://openapi.tuyaus.com',
   cn: 'https://openapi.tuyacn.com',
   in: 'https://openapi.tuyain.com',
@@ -55,12 +54,6 @@ const CLIENT_ID = process.env.TUYA_CLIENT_ID;
 const CLIENT_SECRET = process.env.TUYA_CLIENT_SECRET;
 const HOST = REGION_HOSTS[process.env.TUYA_REGION || 'eu'];
 const SWITCH_CODE = process.env.TUYA_SWITCH_CODE || 'switch_1';
-// Spotlight (LSC smart GU10) uses a different on/off DP code than the
-// M10EM plugs — confirmed via Tuya IoT Platform > Device Debugging on
-// 2026-08-22: switch_led (Boolean), not switch_1. Using switch_1 on this
-// device causes Tuya to reject the whole command with "command or value
-// not support", which also blocked the brightness/colour commands sent
-// in the same call.
 const SPOTLIGHT_SWITCH_CODE = process.env.TUYA_SPOTLIGHT_SWITCH_CODE || 'switch_led';
 const BRIGHTNESS_CODE = process.env.TUYA_BRIGHTNESS_CODE || 'bright_value_v2';
 const COLOR_MODE_CODE = process.env.TUYA_COLOR_MODE_CODE || 'work_mode';
@@ -69,11 +62,9 @@ const COLOR_DATA_CODE = process.env.TUYA_COLOR_DATA_CODE || 'colour_data_v2';
 const DEVICE_IDS = {
   blacklight: process.env.TUYA_BLACKLIGHT_DEVICE_ID,
   tableLight: process.env.TUYA_TABLELIGHT_DEVICE_ID,
-  ambient: process.env.TUYA_AMBIENT_LIGHT_DEVICE_ID, // "ไฟสี" — RGB auto-cycling light
+  ambient: process.env.TUYA_AMBIENT_LIGHT_DEVICE_ID,
 };
 
-// 4-head Spotlight (LSC Smart Connect), index 0-3 = หัวที่ 1-4.
-// Empty until paired tomorrow — every call below no-ops safely until then.
 const SPOTLIGHT_DEVICE_IDS = [
   process.env.TUYA_SPOTLIGHT_1_DEVICE_ID,
   process.env.TUYA_SPOTLIGHT_2_DEVICE_ID,
@@ -81,9 +72,6 @@ const SPOTLIGHT_DEVICE_IDS = [
   process.env.TUYA_SPOTLIGHT_4_DEVICE_ID,
 ];
 
-// Named colours used by the V2 cue engine -> approximate Tuya HSV.
-// h: 0-360, s/v: 0-1000. 'white' skips colour mode entirely (uses the
-// bulb's white channel instead, which is usually brighter/cleaner).
 const HUE_MAP = {
   gold:   { h: 45,  s: 900,  v: 1000 },
   amber:  { h: 35,  s: 950,  v: 1000 },
@@ -92,7 +80,7 @@ const HUE_MAP = {
   purple: { h: 280, s: 900,  v: 1000 },
 };
 
-let cachedToken = null; // { token, expiresAt }
+let cachedToken = null;
 
 let showStatus = { started: false, startedAt: null, videoUrl: "", seekSeconds: null, seekToken: 0 };
 
@@ -181,11 +169,9 @@ async function setBrightness(deviceId, value) {
   return sendCommand(deviceId, [{ code: BRIGHTNESS_CODE, value: v }]);
 }
 
-// Spotlight: เปิด/ปิด + หรี่ + เปลี่ยนสี ในคำสั่งเดียว (ครบตามที่ V2 cue engine ต้องการ)
-// เมื่อ "ปิด" (on=false) จะส่งแค่คำสั่งสวิตช์อย่างเดียว ไม่แนบความสว่าง/สีไปด้วย —
-// เพราะ DP ความสว่างของหลอดนี้กำหนดค่าต่ำสุดไว้ที่ 10 (ไม่ใช่ 0) ถ้าส่ง 0 ไปพร้อมกัน
-// Tuya จะตีกลับคำสั่งทั้งชุดว่า "value not support" รวมถึงคำสั่งปิดสวิตช์ที่แนบไปด้วย
-// ทำให้ไฟไม่ดับ (ค้นพบและแก้ 2026-08-22)
+// Spotlight: เปิด/ปิด + หร + เปลี่ยนสี ในคำสั่งเดียว
+// เมอ "ปิด" (on=false) จะส่งแค่คำสั่งสวิตช์อย่างเดียว ไม่แนบความสว่าง/สีไปด้วย —
+// เพราะ DP ความสว่างของหลอดนี้กำหนดค่าตสุดไว้ที่ 10 (ไม่ใช่ 0)
 async function setSpotlight(deviceId, on, brightness, hue) {
   if (!on) {
     return sendCommand(deviceId, [{ code: SPOTLIGHT_SWITCH_CODE, value: false }]);
@@ -195,13 +181,12 @@ async function setSpotlight(deviceId, on, brightness, hue) {
     const v = Math.max(10, Math.min(1000, Math.round(brightness * 10)));
     commands.push({ code: BRIGHTNESS_CODE, value: v });
   }
-  const hsv = HUE_MAP[hue];
-  if (hsv) {
-    commands.push({ code: COLOR_MODE_CODE, value: 'colour' });
-    commands.push({ code: COLOR_DATA_CODE, value: hsv });
-  } else {
-    commands.push({ code: COLOR_MODE_CODE, value: 'white' });
-  }
+  // ใช้โหมด "colour" เสมอ (แม้จะเป็นสีขาว) แทนโหมด "white" แยกต่างหาก —
+  // เพราะ LED ชุด "white" ของหลอดนี้กระจายแสงกว้างกว่าชุด "colour" มาก
+  // (พบและแก้ 2026-08-22 หลัง Alika รายงานว่าไฟกลายเป็นแสงกระจายแทนลำแคบ)
+  const hsv = HUE_MAP[hue] || { h: 0, s: 0, v: 1000 };
+  commands.push({ code: COLOR_MODE_CODE, value: 'colour' });
+  commands.push({ code: COLOR_DATA_CODE, value: hsv });
   return sendCommand(deviceId, commands);
 }
 
@@ -210,7 +195,7 @@ app.post('/api/plug/:name', async (req, res) => {
   const { on } = req.body;
   const deviceId = DEVICE_IDS[name];
   if (!deviceId) {
-    return res.status(400).json({ ok: false, error: `ไม่รู้จักปลั๊กชื่อ "${name}" หรือยังไม่ได้ตั้งค่า Device ID` });
+    return res.status(400).json({ ok: false, error: `ไม่รู้จักปลกชื่อ "${name}" หรือยังไม่ได้ตั้งค่า Device ID` });
   }
   try {
     const result = await sendCommand(deviceId, on);
@@ -224,7 +209,7 @@ app.post('/api/spotlight/:head', async (req, res) => {
   const head = parseInt(req.params.head, 10);
   const deviceId = SPOTLIGHT_DEVICE_IDS[head];
   if (!deviceId) {
-    return res.status(400).json({ ok: false, error: `Spotlight หัวที่ ${head + 1} ยังไม่ได้ตั้งค่า Device ID (TUYA_SPOTLIGHT_${head + 1}_DEVICE_ID)` });
+    return res.status(400).json({ ok: false, error: `Spotlight หวที่ ${head + 1} ยังไม่ได้ตั้งค่า Device ID (TUYA_SPOTLIGHT_${head + 1}_DEVICE_ID)` });
   }
   const { on, brightness, hue } = req.body;
   try {
