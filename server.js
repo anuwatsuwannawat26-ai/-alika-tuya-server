@@ -55,6 +55,13 @@ const CLIENT_ID = process.env.TUYA_CLIENT_ID;
 const CLIENT_SECRET = process.env.TUYA_CLIENT_SECRET;
 const HOST = REGION_HOSTS[process.env.TUYA_REGION || 'eu'];
 const SWITCH_CODE = process.env.TUYA_SWITCH_CODE || 'switch_1';
+// Spotlight (LSC smart GU10) uses a different on/off DP code than the
+// M10EM plugs — confirmed via Tuya IoT Platform > Device Debugging on
+// 2026-08-22: switch_led (Boolean), not switch_1. Using switch_1 on this
+// device causes Tuya to reject the whole command with "command or value
+// not support", which also blocked the brightness/colour commands sent
+// in the same call.
+const SPOTLIGHT_SWITCH_CODE = process.env.TUYA_SPOTLIGHT_SWITCH_CODE || 'switch_led';
 const BRIGHTNESS_CODE = process.env.TUYA_BRIGHTNESS_CODE || 'bright_value_v2';
 const COLOR_MODE_CODE = process.env.TUYA_COLOR_MODE_CODE || 'work_mode';
 const COLOR_DATA_CODE = process.env.TUYA_COLOR_DATA_CODE || 'colour_data_v2';
@@ -190,7 +197,7 @@ async function setBrightness(deviceId, value) {
 
 // Spotlight: เปิด/ปิด + หรี่ + เปลี่ยนสี ในคำสั่งเดียว (ครบตามที่ V2 cue engine ต้องการ)
 async function setSpotlight(deviceId, on, brightness, hue) {
-  const commands = [{ code: SWITCH_CODE, value: !!on }];
+  const commands = [{ code: SPOTLIGHT_SWITCH_CODE, value: !!on }];
   if (brightness != null) {
     commands.push({ code: BRIGHTNESS_CODE, value: Math.max(0, Math.min(1000, Math.round(brightness * 10))) });
   }
