@@ -94,17 +94,6 @@ const HUE_MAP = {
 
 let cachedToken = null; // { token, expiresAt }
 
-// ------------------------------------------------------------
-// สถานะโชว์แบบง่ายๆ เก็บไว้ในหน่วยความจำของ server (ไม่ต้องใช้ฐานข้อมูล)
-// อยู่รอดตราบใดที่ server ยังไม่รีสตาร์ท (บน free plan ของ Render
-// server จะ "หลับ" เมื่อไม่มีคนใช้งาน แต่ค่านี้จะรีเซ็ตเป็น false ทุกครั้งที่ตื่นใหม่)
-//
-// seekSeconds/seekToken: ใหม่ — ใช้ส่งคำสั่ง "เลื่อนวิดีโอไปวินาทีนี้" จาก
-// iPad ไปให้หน้าจอทีวี (คนละเครื่อง คนละ browser กัน เดิมไม่มีช่องทางนี้เลย
-// ทำให้ลากปุ่มเลื่อนแล้ววิดีโอบนทีวีไม่ตาม — นี่คือจุดที่แก้ให้ตรงนี้).
-// seekToken เปลี่ยนค่าทุกครั้งที่มีการเลื่อนใหม่ ทีวี poll แล้วเทียบค่านี้
-// เพื่อรู้ว่า "นี่เป็นคำสั่งเลื่อนใหม่ที่ยังไม่เคยทำ" ไม่ใช่ค่าเดิมที่เคยเห็นแล้ว.
-// ------------------------------------------------------------
 let showStatus = { started: false, startedAt: null, videoUrl: "", seekSeconds: null, seekToken: 0 };
 
 function sha256Hex(str) {
@@ -115,12 +104,10 @@ function hmacSign(str) {
   return crypto.createHmac('sha256', CLIENT_SECRET).update(str, 'utf8').digest('hex').toUpperCase();
 }
 
-// สร้างลายเซ็นตามกติกาของ Tuya (HMAC-SHA256), ใช้ได้ทั้งตอนขอ token
-// และตอนเรียก API ทั่วไป (ที่ต้องแนบ access_token เพิ่ม)
 function buildSign({ method, path, body, accessToken }) {
   const t = Date.now().toString();
   const bodyHash = sha256Hex(body ? JSON.stringify(body) : '');
-  const headersStr = ''; // ไม่ใช้ signHeaders ในตัวอย่างนี้
+  const headersStr = '';
   const stringToSign = [method, bodyHash, headersStr, path].join('\n');
   const base = CLIENT_ID + (accessToken || '') + t + stringToSign;
   return { sign: hmacSign(base), t };
@@ -190,16 +177,23 @@ async function setSwitch(deviceId, on) {
 }
 
 async function setBrightness(deviceId, value) {
-  // value: 0–1000 ตามมาตรฐาน DP ของ Tuya สำหรับไฟหรี่แสง
   const v = Math.max(0, Math.min(1000, Math.round(value)));
   return sendCommand(deviceId, [{ code: BRIGHTNESS_CODE, value: v }]);
 }
 
 // Spotlight: เปิด/ปิด + หรี่ + เปลี่ยนสี ในคำสั่งเดียว (ครบตามที่ V2 cue engine ต้องการ)
+// เมื่อ "ปิด" (on=false) จะส่งแค่คำสั่งสวิตช์อย่างเดียว ไม่แนบความสว่าง/สีไปด้วย —
+// เพราะ DP ความสว่างของหลอดนี้กำหนดค่าต่ำสุดไว้ที่ 10 (ไม่ใช่ 0) ถ้าส่ง 0 ไปพร้อมกัน
+// Tuya จะตีกลับคำสั่งทั้งชุดว่า "value not support" รวมถึงคำสั่งปิดสวิตช์ที่แนบไปด้วย
+// ทำให้ไฟไม่ดับ (ค้นพบและแก้ 2026-08-22)
 async function setSpotlight(deviceId, on, brightness, hue) {
-  const commands = [{ code: SPOTLIGHT_SWITCH_CODE, value: !!on }];
+  if (!on) {
+    return sendCommand(deviceId, [{ code: SPOTLIGHT_SWITCH_CODE, value: false }]);
+  }
+  const commands = [{ code: SPOTLIGHT_SWITCH_CODE, value: true }];
   if (brightness != null) {
-    commands.push({ code: BRIGHTNESS_CODE, value: Math.max(0, Math.min(1000, Math.round(brightness * 10))) });
+    const v = Math.max(10, Math.min(1000, Math.round(brightness * 10)));
+    commands.push({ code: BRIGHTNESS_CODE, value: v });
   }
   const hsv = HUE_MAP[hue];
   if (hsv) {
@@ -226,9 +220,6 @@ app.post('/api/plug/:name', async (req, res) => {
   }
 });
 
-// ------------------------------------------------------------
-// Spotlight — 4 หัว ควบคุมทีละหัว (เปิด/ปิด/หรี่/เปลี่ยนสีในคำสั่งเดียว)
-// ------------------------------------------------------------
 app.post('/api/spotlight/:head', async (req, res) => {
   const head = parseInt(req.params.head, 10);
   const deviceId = SPOTLIGHT_DEVICE_IDS[head];
@@ -244,10 +235,6 @@ app.post('/api/spotlight/:head', async (req, res) => {
   }
 });
 
-// ------------------------------------------------------------
-// Tuya connectivity test — เช็คจริงว่า credential ใช้ได้ไหม และอุปกรณ์แต่ละตัว
-// เชื่อมกับ Cloud Project นี้อยู่จริงไหม (คนละเรื่องกับแค่ server ทำงานอยู่)
-// ------------------------------------------------------------
 app.get('/api/tuya-test', async (req, res) => {
   const out = { credentialsConfigured: !!(CLIENT_ID && CLIENT_SECRET), region: process.env.TUYA_REGION || 'eu' };
 
@@ -298,10 +285,6 @@ app.get('/api/tuya-test', async (req, res) => {
   res.json({ ok: allOk, ...out, devices });
 });
 
-// ------------------------------------------------------------
-// Show status endpoints — ใช้ให้หน้าเว็บที่เปิดค้างไว้ในทีวี (tv.html)
-// คอยเช็คว่า iPad กด "เริ่มโชว์" แล้วหรือยัง / เลื่อนวิดีโอไปวินาทีไหน
-// ------------------------------------------------------------
 app.get('/api/show-status', (req, res) => {
   res.json(showStatus);
 });
