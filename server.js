@@ -14,19 +14,17 @@
 //
 //   GET  /api/show-status       -> { started, startedAt, videoUrl, seekSeconds, seekToken }
 //   POST /api/show-status       body: { "started": true }  หรือ { "started": false }
-//                                    หรือ { "seekSeconds": 123.4 }  (ใหม่ — สั่งเลื่อนวิดีโอ)
-//   (ใช้เป็นสัญญาณกลาง ให้หน้าเว็บที่เปิดค้างไว้ที่ทีวี รู้ว่า iPad กด "เริ่มโชว์"/เลื่อนวิดีโอ แล้วหรือยัง)
+//                                    หรือ { "seekSeconds": 123.4 }
 //
-//   GET  /api/tuya-test         -> เช็คจริงว่าคุยกับ Tuya Cloud ได้ไหม (ขอ token + เช็คสถานะทุกอุปกรณ์)
+//   GET  /api/tuya-test         -> เช็คจริงว่าคุยกับ Tuya Cloud ได้ไหม
 //
 // ต้องตั้งค่า Environment Variables ก่อนรัน (ดู .env.example):
 //   TUYA_CLIENT_ID, TUYA_CLIENT_SECRET, TUYA_REGION,
 //   TUYA_BLACKLIGHT_DEVICE_ID, TUYA_TABLELIGHT_DEVICE_ID,
-//   TUYA_AMBIENT_LIGHT_DEVICE_ID   (= "ไฟสี" — ใส่ตอนที่รู้ว่าจับคู่ Tuya ได้จริงไหม)
-//   TUYA_SPOTLIGHT_1_DEVICE_ID .. TUYA_SPOTLIGHT_4_DEVICE_ID   (ใส่พรุ่งนี้หลังจับคู่หลอด Spotlight)
+//   TUYA_AMBIENT_LIGHT_DEVICE_ID   (= "ไฟสี")
+//   TUYA_SPOTLIGHT_1_DEVICE_ID .. TUYA_SPOTLIGHT_4_DEVICE_ID
 //   TUYA_SWITCH_CODE (ปกติคือ "switch_1"), TUYA_BRIGHTNESS_CODE (ปกติคือ "bright_value_v2")
 //   TUYA_COLOR_MODE_CODE (ปกติคือ "work_mode"), TUYA_COLOR_DATA_CODE (ปกติคือ "colour_data_v2")
-//     — ถ้าหลอด LSC ใช้ชื่อ DP ต่างจากนี้ เช็คได้จาก Tuya IoT Platform > อุปกรณ์ > Debug Device
 // -----------------------------------------------------------------------
 
 const express = require('express');
@@ -63,8 +61,6 @@ const DEVICE_IDS = {
   blacklight: process.env.TUYA_BLACKLIGHT_DEVICE_ID,
   tableLight: process.env.TUYA_TABLELIGHT_DEVICE_ID,
   // "ไฟสี" (ambient) เป็นปลั๊กตัวเดียวกับ "ไฟโต๊ะ" (M10EM 3) — ไม่ใช่อุปกรณ์แยก
-  // ใช้ Device ID เดียวกันเป็นค่าเริ่มต้นเสมอ (เว้นแต่ตั้ง TUYA_AMBIENT_LIGHT_DEVICE_ID
-  // แยกไว้ที่ Render ก็ให้ใช้ค่านั้นแทน) — แก้ 2026-08-22
   ambient: process.env.TUYA_AMBIENT_LIGHT_DEVICE_ID || process.env.TUYA_TABLELIGHT_DEVICE_ID,
 };
 
