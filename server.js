@@ -9,7 +9,7 @@
 //   POST /api/plug/ambient      body: { "on": [{"code":"switch_1","value":true}] }
 //        (= "ไฟสี" — ใช้ endpoint เดิมนี้ได้เลย ไม่ต้องมี endpoint ใหม่)
 //
-//   POST /api/spotlight/:head   body: { "on": true, "brightness": 0-100, "hue": "white"|"gold"|"amber"|"orange"|"red"|"purple" }
+//   POST /api/spotlight/:head   body: { "on": true, "brightness": 0-100, "hue": "white"|"gold"|"amber"|"orange"|"red"|"purple"|"blue"|"cyan"|"green"|"pink"|"yellow" }
 //        head = 0,1,2,3 (หัวที่ 1-4)
 //
 //   GET  /api/show-status       -> { started, startedAt, videoUrl, seekSeconds, seekToken }
@@ -88,12 +88,19 @@ const SPOTLIGHT_DEVICE_IDS = [
 // Named colours used by the V2 cue engine -> approximate Tuya HSV.
 // h: 0-360, s/v: 0-1000. 'white' skips colour mode entirely (uses the
 // bulb's white channel instead, which is usually brighter/cleaner).
+// blue/cyan/green/pink/yellow added 2026-08-24 per Alika's request —
+// cyan ("ฟ้า", sky blue) is distinct from blue ("น้ำเงิน", deeper/navy blue).
 const HUE_MAP = {
   gold:   { h: 45,  s: 900,  v: 1000 },
   amber:  { h: 35,  s: 950,  v: 1000 },
   orange: { h: 25,  s: 1000, v: 1000 },
   red:    { h: 0,   s: 1000, v: 1000 },
   purple: { h: 280, s: 900,  v: 1000 },
+  blue:   { h: 225, s: 900,  v: 1000 },
+  cyan:   { h: 190, s: 800,  v: 1000 },
+  green:  { h: 120, s: 900,  v: 1000 },
+  pink:   { h: 330, s: 650,  v: 1000 },
+  yellow: { h: 55,  s: 1000, v: 900  },
 };
 
 let cachedToken = null; // { token, expiresAt }
