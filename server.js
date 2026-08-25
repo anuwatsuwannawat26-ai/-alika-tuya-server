@@ -8,6 +8,8 @@
 //   POST /api/plug/tableLight   body: { "on": [{"code":"switch_1","value":false}] }
 //   POST /api/plug/ambient      body: { "on": [{"code":"switch_1","value":true}] }
 //        (= "ไฟสี" — ใช้ endpoint เดิมนี้ได้เลย ไม่ต้องมี endpoint ใหม่)
+//   POST /api/plug/frontLight   body: { "on": [{"code":"switch_1","value":true}] }
+//        (= "ไฟหน้าบ้าน" / ไฟส่องพระพุทธรูปทางเข้า — เพิ่ม 2026-08-25)
 //
 //   POST /api/spotlight/:head   body: { "on": true, "brightness": 0-100, "hue": "white"|"gold"|"amber"|"orange"|"red"|"purple"|"blue"|"cyan"|"green"|"pink"|"yellow" }
 //        head = 0,1,2,3 (หัวที่ 1-4)
@@ -23,6 +25,7 @@
 //   TUYA_CLIENT_ID, TUYA_CLIENT_SECRET, TUYA_REGION,
 //   TUYA_BLACKLIGHT_DEVICE_ID, TUYA_TABLELIGHT_DEVICE_ID,
 //   TUYA_AMBIENT_LIGHT_DEVICE_ID   (= "ไฟสี" — ใส่ตอนที่รู้ว่าจับคู่ Tuya ได้จริงไหม)
+//   TUYA_FRONTLIGHT_DEVICE_ID      (= "ไฟหน้าบ้าน" — เพิ่ม 2026-08-25)
 //   TUYA_SPOTLIGHT_1_DEVICE_ID .. TUYA_SPOTLIGHT_4_DEVICE_ID   (ใส่พรุ่งนี้หลังจับคู่หลอด Spotlight)
 //   TUYA_SWITCH_CODE (ปกติคือ "switch_1"), TUYA_BRIGHTNESS_CODE (ปกติคือ "bright_value_v2")
 //   TUYA_COLOR_MODE_CODE (ปกติคือ "work_mode"), TUYA_COLOR_DATA_CODE (ปกติคือ "colour_data_v2")
@@ -74,6 +77,8 @@ const DEVICE_IDS = {
   // TUYA_AMBIENT_LIGHT_DEVICE_ID แยกไว้ที่ Render ก็ให้ใช้ค่านั้นแทน
   // (แก้ 2026-08-22 หลังพบว่าไฟโต๊ะ/ไฟสีค้างเปิดตลอดทั้งโชว์ ไม่เคยถูกสั่งเลย)
   ambient: process.env.TUYA_AMBIENT_LIGHT_DEVICE_ID || process.env.TUYA_TABLELIGHT_DEVICE_ID,
+  // "ไฟหน้าบ้าน" — ไฟส่องพระพุทธรูป 2 องค์หน้าทางเข้า (เพิ่ม 2026-08-25)
+  frontLight: process.env.TUYA_FRONTLIGHT_DEVICE_ID,
 };
 
 // 4-head Spotlight (LSC Smart Connect), index 0-3 = หัวที่ 1-4.
